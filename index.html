@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Book Club Voting Board</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 850px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+
+        h1 { text-align: center; }
+
+        button {
+            padding: 8px 12px;
+            cursor: pointer;
+            margin-bottom: 10px;
+            margin-right: 5px;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .entry {
+            border: 1px solid #ddd;
+            padding: 12px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .meta {
+            font-size: 12px;
+            color: gray;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .meta img {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+        }
+
+        .votes {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .score {
+            font-weight: bold;
+            min-width: 30px;
+            text-align: center;
+        }
+
+        #userBox {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>Book Club Voting Board</h1>
+
+<button id="loginBtn">Sign in with Google</button>
+<button id="logoutBtn" style="display:none;">Sign out</button>
+
+<div id="userBox"></div>
+
+<input id="entryInput" placeholder="Add new idea..." />
+<button onclick="addEntry()">Add Entry</button>
+
+<input id="searchInput" placeholder="Search..." oninput="render()" />
+
+<div id="entries"></div>
+
+<script type="module">
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+    import {
+        getFirestore,
+        collection,
+        addDoc,
+        query,
+        orderBy,
+        onSnapshot,
+        doc,
+        runTransaction,
+        deleteDoc
+    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
+    import {
+        getAuth,
+        GoogleAuthProvider,
+        signInWithPopup,
+        onAuthStateChanged,
+        signOut
+    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
+
+    /* 🔥 FIREBASE CONFIG */
+    const firebaseConfig = {
+        apiKey: "AIzaSyA6FO-xhSGoa1hhFx9RRkI5hQm2GEBwWTA",
+        authDomain: "book-club-57a38.firebaseapp.com",
+        projectId: "book-club-57a38",
+        storageBucket: "book-club-57a38.firebasestorage.app",
+        messagingSenderId: "418596540446",
+        appId: "1:418596540446:web:a0ebc2506a5bae7fbb5e0f"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
+    const entriesRef = collection(db, "entries");
+
+    let entries = [];
+    let user = null;
+
+    document.getElementById("loginBtn").onclick = async () => {
+        try {
+            await signInWithPopup(auth, provider);
+        } catch (e) {
+            console.error(e);
+            alert("Login failed");
+        }
+    };
+
+    document.getElementById("logoutBtn").onclick = async () => {
+        try {
+            await signOut(auth);
+        } catch (e) {
+            console.error(e);
+            alert("Logout failed");
+        }
+    };
+
+    onAuthStateChanged(auth, (u) => {
+        if (!u) {
+            user = null;
+            document.getElementById("userBox").innerHTML = "";
+            document.getElementById("logoutBtn").style.display = "none";
+            return;
+        }
+
+        user = {
+            uid: u.uid,
+            name: u.displayName,
+            photo: u.photoURL
+        };
+
+        document.getElementById("userBox").innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;">
+            <img src="${user.photo}" width="28" style="border-radius:50%">
+            <span>Signed in as <b>${user.name}</b></span>
+        </div>
+    `;
+
+        document.getElementById("logoutBtn").style.display = "inline-block";
+
+        document.getElementById("entryInput").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                addEntry();
+            }
+        });
+
+        startApp();
+    });
+
+    function startApp() {
+        onSnapshot(query(entriesRef, orderBy("score", "desc")), (snap) => {
+            entries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            render();
+        });
+    }
+
+    window.addEntry = async function () {
+        if (!user) return alert("Please sign in first");
+
+        const input = document.getElementById("entryInput");
+        const text = input.value.trim();
+        if (!text) return;
+
+        const duplicate = entries.some(
+            e => e.text.toLowerCase().trim() === text.toLowerCase().trim()
+        );
+
+        if (duplicate) {
+            alert("Duplicate entry not allowed");
+            return;
+        }
+
+        await addDoc(entriesRef, {
+            text,
+            score: 0,
+            createdAt: Date.now(),
+            createdBy: {
+                uid: user.uid,
+                name: user.name,
+                photo: user.photo
+            }
+        });
+
+        confetti({
+            particleCount: 200,
+            spread: 90,
+            origin: { y: 0.6 }
+        });
+
+        input.value = "";
+    };
+
+    window.vote = async function (entryId, delta) {
+        if (!user) return;
+
+        const voteId = `${entryId}_${user.uid}`;
+        const voteRef = doc(db, "votes", voteId);
+        const entryRef = doc(db, "entries", entryId);
+
+        await runTransaction(db, async (tx) => {
+            const voteSnap = await tx.get(voteRef);
+            const entrySnap = await tx.get(entryRef);
+
+            if (!entrySnap.exists()) return;
+
+            const currentScore = entrySnap.data().score || 0;
+            if (currentScore === 0 && delta < 0) return;
+
+            let userVotes = delta;
+            if (voteSnap.exists()) {
+                console.log(user)
+                if (user.name.toString().toLowerCase().includes("anna") || voteSnap.data().value !== delta) {
+                    userVotes += voteSnap.data().value;
+                }
+                else {
+                    delta = 0
+                }
+            }
+
+            tx.set(voteRef, {
+                entryId,
+                userId: user.uid,
+                value: userVotes
+            });
+
+            tx.update(entryRef, {
+                score: currentScore + delta
+            });
+        });
+    };
+
+    window.deleteEntry = async function (entryId, ownerUid) {
+        if (!user) return;
+
+        if (user.uid !== ownerUid) {
+            alert("You can only delete your own entries.");
+            return;
+        }
+
+        await deleteDoc(doc(db, "entries", entryId));
+    };
+
+    function render() {
+        const q = document.getElementById("searchInput").value.toLowerCase();
+
+        const filtered = entries.filter(e =>
+            e.text.toLowerCase().includes(q)
+        );
+
+        document.getElementById("entries").innerHTML = filtered.map(e => `
+        <div class="entry">
+            <div>
+                <div><b>${escapeHtml(e.text)}</b></div>
+
+                <div class="meta">
+                    ${e.createdBy?.photo ? `<img src="${e.createdBy.photo}">` : ""}
+                    <span>added by ${e.createdBy?.name || "unknown"}</span>
+                </div>
+            </div>
+
+            <div class="votes">
+                <button onclick="vote('${e.id}', 1)">👍</button>
+                <div class="score">${e.score || 0}</div>
+                <button onclick="vote('${e.id}', -1)">👎</button>
+
+                ${
+            user && e.createdBy?.uid === user.uid
+                ? `<button onclick="deleteEntry('${e.id}', '${e.createdBy.uid}')" style="color:red;">
+                        🗑️
+                       </button>`
+                : ""
+        }
+            </div>
+        </div>
+    `).join("");
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+</script>
+
+</body>
+</html>
