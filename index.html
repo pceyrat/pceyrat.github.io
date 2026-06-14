@@ -321,7 +321,10 @@
 
         if (isOpen) {
             box.classList.add("hidden");
-            commentListeners[entryId] = null
+            if (commentListeners[entryId]) {
+                commentListeners[entryId]();
+                delete commentListeners[entryId];
+            }
             return;
         }
 
@@ -335,7 +338,6 @@
        placeholder="Write a comment..."
        onkeydown="handleCommentKey(event, '${entryId}')" />
 
-<button onclick="addComment('${entryId}')">Post</button>
             <button onclick="addComment('${entryId}')">Post</button>
         ` : `<i>Login to comment</i>`}
     `;
@@ -438,7 +440,7 @@
         }
     }
 
-    function render() {
+    window.render = function () {
         const q = document.getElementById("searchInput").value.toLowerCase();
 
         const filtered = entries.filter(e =>
